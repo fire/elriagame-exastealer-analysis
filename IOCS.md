@@ -4,11 +4,17 @@
 
 | kind | value | notes |
 |---|---|---|
-| C2 (HTTP) | `http://52.249.219.108:3001` | Microsoft Azure, plain HTTP, nonstandard port. Only non-library URL in the JAR. |
+| C2 (HTTP) | `http://52.249.219.108:3001` | Microsoft Azure, plain HTTP, nonstandard port. |
+| C2 route  | `POST /api/validate-tokens`             | key + Discord-token validation |
+| C2 route  | `POST /api/discord-injection/<KEY>`     | Discord-renderer IPC / injection callback |
+| C2 route  | `POST /api/internal/log`                | progress / error logging |
+| Live Discord API | `GET https://discord.com/api/v10/users/@me` | validate stolen token |
+| Live Discord API | `GET https://canary.discord.com/api/v9/users/@me` | validate canary token |
+| Operator key | `PANEL-XSER-YZ76-YFMK` | baked into this build's `PLhWEEjyn.ENCRYPTED_KEY`; sent as `KEY` |
 
 The JAR bundles `okhttp3`, Apache HttpClient 5, and `java-websocket`, so
-subsequent exfil channels may be WebSocket (`ws://52.249.219.108:3001/...`) as
-well as HTTP POST.
+subsequent exfil channels may include WebSocket (`ws://52.249.219.108:3001/...`)
+as well as HTTP POST.
 
 ## Host
 

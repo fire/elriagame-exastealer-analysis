@@ -188,18 +188,62 @@ hash, or a decision.
   A build with a different C2 IP or a different `APP_NAME` will not
   collide.
 
+## JAR string-decryption pass
+
+Two days later the JAR body is readable. Method and apparatus:
+
+18. **CFR bailed on the flattened dispatchers.** Vineflower 1.11.1
+    restructured them and produced 46 920 lines of readable Java where every
+    string was still `K(int, int)` or `K(int, int, char)`. Two decrypt-method
+    variants were in play; both used `new Throwable().getStackTrace()[1]`,
+    so per call site the caller's class-name and method-name hashes mixed
+    into the mask.
+19. **Static verification before any class load.** `javap -c -p` over all 67
+    binary classes in the package, `<clinit>` blocks extracted with an awk
+    range, grep'd for `ProcessBuilder|Runtime\.|Socket|URLConnection|Files\.|
+    FileOutputStream|Registry|loadLibrary|System\.load|exec\(`. Zero hits.
+    Missed on this pass: `System.getProperty` / `System.getenv` calls, which
+    are read-only but leaked the analyst's `user.home` into
+    `IvTHdVAG.STEALTH_BASES` on the dump.
+20. **Java reflection dumper** (`scripts/dump_tables.java`). Loaded each
+    class inside a fresh `URLClassLoader`, triggered `<clinit>`, and read
+    every `private static final String[]` and `int[]` field by name-agnostic
+    type probe. 37 classes had static arrays. Six JNA `Native.load` classes
+    failed to initialise on macOS (`libkernel32.dylib` etc. do not exist);
+    that is correct — those classes carry no obfuscated strings.
+21. **Python deobfuscator** (`scripts/deobfuscate_strings.py`). Parses each
+    Vineflower source for the per-class decrypt method signatures; extracts
+    six free constants from each body (`K_INDEX_MAGIC` / `K_INDEX_CHAR_MAGIC`,
+    `CALLER_HASH_MAGIC`, the 32-byte `XOR_TABLE`, the pre-chain of `+`/`^`
+    ops, and which int arg is direct vs. `>> 16`); walks brace depth with a
+    comment/string-aware tracker to bind each call site to its enclosing
+    binary class (`Outer$Inner$…`, anonymous inner-class counter for
+    `new I() { … }`) and method (with `<clinit>` for `static { … }`);
+    reimplements `String.hashCode()` and Java 32-bit arithmetic shift.
+    Result: **2 340 / 2 341 (99.96%)** call sites substituted with correct
+    plaintext; one 3-arg `x`-named variant in `SquEZNKwht` remains.
+22. **Sanity witness.** The known call `K(740929368, 332741314)` inside
+    `PLhWEEjyn.disableTaskManager` decodes to `"wscript.exe"` — matches the
+    `new ProcessBuilder(…, "//B", "//Nologo", vbsPath)` shape. Two hand-
+    traces (this one and `ENCRYPTED_KEY` in `<clinit>` → `"PANEL-XSER-YZ76-YFMK"`)
+    confirmed the algorithm before the batch pass wrote to disk.
+23. **What tables not to publish.** `tables.json` contains
+    `IvTHdVAG.STEALTH_BASES = [analyst_home]` from the `<clinit>` side
+    effect, plus `IvTHdVAG.__NATIVE_CHUNKS[317]` — the base64-chunked bytes
+    of `peynir.dll` embedded in the JAR. Neither is in the published repo.
+    The full decrypted Java source is not published either; the repo policy
+    covers analysis and tools, not payload redistribution.
+
 ## Open items
 
-- The 23 decompiled classes in `com.xc17edb19a.*` are not yet readable —
-  CFR emits large `switch(int)` dispatchers because the obfuscator flattens
-  control flow, and every string is `K(intA, intB)` or `x(intA, intB)`. A
-  next step is a small string-decryption harness (either evaluate the two
-  static methods against the cipher tables in the static initializer, or
-  reimplement them from the bytecode) so that the class files can be read
-  as English rather than integers.
-- Dynamic behavior is not recorded here because none was run — the C2
-  wire format, the actual browser/wallet target list, and the `ShellExec`
-  arguments live inside strings that are still integers.
-- The `native/*` per-platform binaries inside the JAR (`.so`/`.dll`
-  /`.jnilib`/`.a`) were assumed to be stock JNA platform libraries on
-  the shape of their names, not verified byte-for-byte.
+- One 3-arg `x`-named string decrypt variant in `SquEZNKwht` remains
+  unmodelled; 4 strings unread.
+- `TfixYBtWK` (the C2 poller) defeated Vineflower's restructuring at one
+  spot; class-level `okhttp3` + `java-websocket` imports say it uses both
+  HTTP and WebSocket, but the exact request framing is not written down.
+- Native `native/*` per-platform binaries (`.so`/`.dll`/`.jnilib`/`.a`) were
+  assumed to be stock JNA platform libraries on the shape of their names,
+  not verified byte-for-byte.
+- Dynamic behavior is not recorded here because none was run — the actual
+  wire body sent to `/api/validate-tokens` and the response shape live on
+  the C2, which was not contacted.

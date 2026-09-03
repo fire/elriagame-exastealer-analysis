@@ -187,6 +187,16 @@ That gives you, under `./out/`:
 The unpacker never runs the installer or the JAR. It writes the decrypted
 launcher to disk rather than passing it to `eval`.
 
+## The Java payload
+
+The full reverse of `emre.jar` — obfuscator model, string-decrypt algorithm,
+class map (obfuscated → intent), C2 protocol, target catalog (48 desktop
+wallets, 61 browser wallet extensions, 5 browsers × 6 profiles, 90 file
+extensions), Discord renderer injection, Task-Manager disable — is in
+[`JAR_INTERNALS.md`](JAR_INTERNALS.md). The two deobfuscation tools
+(`scripts/dump_tables.java` and `scripts/deobfuscate_strings.py`) reproduce
+it locally against the sample.
+
 ## Repository policy
 
 This repo carries the **write-up and tooling only**. `emre.jar`, `peynir.dll`,
