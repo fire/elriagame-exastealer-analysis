@@ -190,7 +190,7 @@ hash, or a decision.
 
 ## JAR string-decryption pass
 
-Two days later the JAR body is readable. Method and apparatus:
+Later the same session, the JAR body is readable. Method and apparatus:
 
 18. **CFR bailed on the flattened dispatchers.** Vineflower 1.11.1
     restructured them and produced 46 920 lines of readable Java where every
