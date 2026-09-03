@@ -50,11 +50,24 @@ well as HTTP POST.
 
 See [`HASHES.txt`](HASHES.txt).
 
+## UAC bypass (see [`PEYNIR_DLL.md`](PEYNIR_DLL.md))
+
+- CLSID: `{3E5FC7F9-9A51-4367-9063-A120244FBEC7}` (CMSTPLUA / `ICMLuaUtil`).
+- Moniker: `Elevation:Administrator!new:{3E5FC7F9-9A51-4367-9063-A120244FBEC7}`,
+  XOR-decrypted from three 16-byte blobs in `peynir.dll` `.rdata`.
+- Method: PEB `CurrentDirectory` / `DllPath` spoofed to `C:\Windows\System32\`,
+  then `CoGetObject` + `ICMLuaUtil::ShellExec` (vtable `+0x48`).
+
 ## Detection ideas
 
 - HKCU Run value `emre` whose data ends in `emre.jar --startup`.
 - `javaw.exe` whose parent is an Electron app in `%LOCALAPPDATA%\emre\`.
 - Outbound HTTP or WebSocket to `52.249.219.108:3001`.
+- Elevated `ICMLuaUtil` COM instantiation whose parent is a medium-integrity
+  `javaw.exe` under `%LOCALAPPDATA%\emre\`.
+- Process whose PEB `CurrentDirectory` reads `C:\Windows\System32\` while its
+  image path is under `%LOCALAPPDATA%` — the bypass leaves the spoof in place
+  after the elevated call returns.
 - Process command line containing `_HIDDEN_MARKER=1` combined with an EXE under
   `%LOCALAPPDATA%\emre`.
 - Any signed-looking installer that drops a password-protected `data.7z`

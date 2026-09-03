@@ -20,7 +20,7 @@ Nothing here was executed; the whole analysis is static, on macOS.
 | Install dir | `%LOCALAPPDATA%\emre\` |
 | Persistence | `HKCU\...\Run\emre` = `javaw -jar %LOCALAPPDATA%\emre\emre.jar --startup` |
 | Stealth | 0×0 window, `skipTaskbar`, prevents-quit, self-respawn, auto-restart ≤ 2× |
-| Capabilities | DPAPI unwrap (`MyCrypt32`/`NCrypt`), Firefox NSS, token-elevation probe, JNA, native `peynir.dll` |
+| Capabilities | DPAPI unwrap (`MyCrypt32`/`NCrypt`), Firefox NSS, token-elevation probe, JNA, **UAC bypass via `ICMLuaUtil` in `peynir.dll`** |
 | Exfil | okhttp3 + Apache HttpClient 5 + java-websocket → `http://52.249.219.108:3001` |
 | Locale hint | "emre" (Turkish given name), "peynir" (Turkish "cheese") |
 
@@ -143,9 +143,12 @@ Structural observations from the class list (4 539 `.class` files):
 - A `mozilla/` tree for Firefox NSS decryption.
 - Networking stack: `okhttp3.*`, Apache HttpClient 5 (`org.apache.hc.*`),
   `org.java_websocket.*`.
-- Native shim: `peynir.dll` (PE32+ x86-64) at the JAR root, plus per-platform
-  `native/*` `.so`/`.dll`/`.jnilib`/`.a` files. `peynir` is Turkish for cheese
-  — matches `APP_NAME="emre"`.
+- Native shim: `peynir.dll` (PE32+ x86-64) at the JAR root — a JNI wrapper
+  around the **`ICMLuaUtil` UAC bypass** (UACMe method 41 / Leo Davidson),
+  called as `IvTHdVAG.nativeRunElevated(String cmd, String args)`. Full
+  reverse in [`PEYNIR_DLL.md`](PEYNIR_DLL.md). Plus per-platform `native/*`
+  `.so`/`.dll`/`.jnilib`/`.a` files. `peynir` is Turkish for cheese — matches
+  `APP_NAME="emre"`.
 - Four pre-styled HTML **lures** at the root: `beta-game-setup.html`,
   `fake-error.html`, `mc-client-setup.html`, `watch-setup.html` — all rendered
   as Windows-installer-lookalike dialogs while the stealer runs.
