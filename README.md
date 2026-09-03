@@ -20,8 +20,8 @@ Nothing here was executed; the whole analysis is static, on macOS.
 | Install dir | `%LOCALAPPDATA%\emre\` |
 | Persistence | `HKCU\...\Run\emre` = `javaw -jar %LOCALAPPDATA%\emre\emre.jar --startup` |
 | Stealth | 0×0 window, `skipTaskbar`, prevents-quit, self-respawn, auto-restart ≤ 2× |
-| Capabilities | DPAPI unwrap (`MyCrypt32`/`NCrypt`), Firefox NSS, token-elevation probe, JNA, **UAC bypass via `ICMLuaUtil` in `peynir.dll`** |
-| Exfil | okhttp3 + Apache HttpClient 5 + java-websocket → `http://52.249.219.108:3001` |
+| Capabilities | DPAPI unwrap (`MyCrypt32`/`NCrypt`), Firefox NSS, token-elevation probe, JNA, **elevation-moniker UAC bypass in `peynir.dll`** |
+| Exfil | okhttp3 + Apache HttpClient 5 + java-websocket → `http://52.249.219.108:3001` (WebSocket URL not recovered) |
 | Locale hint | "emre" (Turkish given name), "peynir" (Turkish "cheese") |
 
 ## Delivery chain
@@ -144,7 +144,7 @@ Structural observations from the class list (4 539 `.class` files):
 - Networking stack: `okhttp3.*`, Apache HttpClient 5 (`org.apache.hc.*`),
   `org.java_websocket.*`.
 - Native shim: `peynir.dll` (PE32+ x86-64) at the JAR root — a JNI wrapper
-  around the **`ICMLuaUtil` UAC bypass** (UACMe method 41 / Leo Davidson),
+  around the **CMSTPLUA / `ICMLuaUtil` elevation-moniker UAC bypass**,
   called as `IvTHdVAG.nativeRunElevated(String cmd, String args)`. Full
   reverse in [`PEYNIR_DLL.md`](PEYNIR_DLL.md). Plus per-platform `native/*`
   `.so`/`.dll`/`.jnilib`/`.a` files. `peynir` is Turkish for cheese — matches

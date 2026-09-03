@@ -13,7 +13,9 @@ unpack, the ways to find them are:
 3. If neither works, open an issue describing your use case; sample sharing
    between defenders will happen out of band, not through this repo.
 
-If you obtain a related but non-identical build (a different Azure IP, a
-different `APP_NAME`, a different install directory), that's expected —
-the operator rotates strings between builds. The dropper *shape* and the
-JAR *identity* (`Implementation-Title: Exastealer`) are the stable pieces.
+If you obtain a related but non-identical build (a different C2 IP, a
+different `APP_NAME`, a different install directory), that's normal —
+builds may rotate those values. The dropper *shape* (Electron installer +
+password-protected `data.7z` + private JRE) and the JAR *identity*
+(`Implementation-Title: Exastealer`) are the stable pieces this write-up
+turns on.

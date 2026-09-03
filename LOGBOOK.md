@@ -9,8 +9,8 @@ someone else can re-run the same static dissection and get the same result.
 - SHA-256: `319acc0f884b20f8c36c03912996c98f7860abf99d39e7492775c0320ae9e00d`.
 - `file(1)` reports: `PE32 executable (GUI) Intel 80386, for MS Windows,
   Nullsoft Installer self-extracting archive`.
-- Delivered to the analyst's Downloads folder; handed off as
-  "treat as malware."
+- The user provided the file at `~/Downloads/ElriaGame.exe` and framed it as
+  "treat as malware".
 - The whole analysis is static, on macOS (Apple silicon, `arm64_tahoe`).
   Nothing was executed at any point — no Wine, no VM boot, no `java -jar`
   on the payload.
@@ -87,8 +87,8 @@ hash, or a decision.
    matches rather than looping forever.
 9. **Read stage-4.** Beautified to 509 lines. This is the dropper. Two
    constants named the whole thing: `APP_NAME = "emre"` and
-   `ARCHIVE_PASSWORD = "7zgw3s6kxCZi"` with the author's own comment
-   "Injected during build." Behavior: hide the Electron window at 0×0,
+   `ARCHIVE_PASSWORD = "7zgw3s6kxCZi"` (with a trailing line comment
+   `// Injected during build` in the source). Behavior: hide the Electron window at 0×0,
    respawn detached with `_HIDDEN_MARKER=1`, copy `data.7z` to
    `%LOCALAPPDATA%\emre\`, extract with the recovered password, extract
    `jre.zip` alongside for a private JRE, delete both archives, write
@@ -203,7 +203,7 @@ Later the same session, the JAR body is readable. Method and apparatus:
     range, grep'd for `ProcessBuilder|Runtime\.|Socket|URLConnection|Files\.|
     FileOutputStream|Registry|loadLibrary|System\.load|exec\(`. Zero hits.
     Missed on this pass: `System.getProperty` / `System.getenv` calls, which
-    are read-only but leaked the analyst's `user.home` into
+    are read-only but leaked the analysis host's `user.home` value into
     `IvTHdVAG.STEALTH_BASES` on the dump.
 20. **Java reflection dumper** (`scripts/dump_tables.java`). Loaded each
     class inside a fresh `URLClassLoader`, triggered `<clinit>`, and read

