@@ -1,0 +1,12 @@
+# SHA-256 hashes for the analyzed sample.
+# The samples themselves are NOT included in this repo; see README.md.
+
+319acc0f884b20f8c36c03912996c98f7860abf99d39e7492775c0320ae9e00d  ElriaGame.exe                (NSIS installer, 146 758 741 bytes)
+eade28260b381d60087d3f6d045990dd1465cb329ff06882b480a01edbddbabc  $PLUGINSDIR/app-64.7z        (electron-builder payload)
+33f0ac160b6807c7e70015a148ac4ddfe89341c7a8b8454234afc3c3b2060712  resources/data/emre.jar      (Exastealer, 42 593 204 bytes)
+9ec1331b90ce86a584320e9922a4fd1ed5afc2dce884d3ea8189c57026b8c9f7  emre.jar!/peynir.dll         (native shim, PE32+ x86-64)
+
+# Stock NSIS plugins (not malicious, included for provenance):
+b393f05e8ff919ef071181050e1873c9a776e1a0ae8329aefff7007d0cadf592  $PLUGINSDIR/nsis7z.dll
+b72e9013a6204e9f01076dc38dabbf30870d44dfc66962adbf73619d4331601e  $PLUGINSDIR/StdUtils.dll
+3eb38ae99653a7dbc724132ee240f6e5c4af4bfe7c01d31d23faf373f9f2eaca  $PLUGINSDIR/System.dll

@@ -1,0 +1,13 @@
+# Deliberately keep every extracted artifact out of git.
+# This repo publishes analysis + tooling only. Samples are not redistributed.
+out/
+samples/
+*.exe
+*.dll
+*.7z
+*.jar
+*.zip
+*.jre
+*.asar
+node_modules/
+.DS_Store
