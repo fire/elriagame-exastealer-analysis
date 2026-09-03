@@ -44,11 +44,13 @@ hash, or a decision.
    next tool: `7z x` unpacks NSIS SFX without executing it.
 2. **Unpack the NSIS layer.** `7zz x` into a per-run scratchpad. Result: four
    files in `$PLUGINSDIR/` — three stock NSIS plugin DLLs (`nsis7z.dll`,
-   `StdUtils.dll`, `System.dll`, hashed for provenance) and a 140 MB
-   `app-64.7z`, which is the electron-builder payload shape.
+   `StdUtils.dll`, `System.dll`, hashed for provenance) and a 146 MB
+   `app-64.7z` (146 342 523 bytes), which is the electron-builder payload
+   shape.
 3. **Unpack the electron-builder payload.** `7zz x app-64.7z`. Result: a
-   standard Electron-32 tree — Chromium DLLs, `locales/`, `resources/`,
-   plus an Electron shell renamed `ElriaGame.exe` (224 MB).
+   standard electron-builder tree — Chromium DLLs and locale packs at the
+   top level, plus a `resources/` subdirectory, plus an Electron-shell
+   `ElriaGame.exe` (235 MB). The Electron/Chromium version was not read.
 4. **Enumerate the Electron resources.** In `resources/`, four items were
    novel next to a stock electron-builder tree: `data.7z` (41 MB, 7z magic),
    two bundled `7za.exe` variants (x64 and ia32), `elevate.exe`, and a
@@ -107,21 +109,23 @@ hash, or a decision.
     `Main-Class: com.xc17edb19a.PLhWEEjyn`. 4 539 `.class` files. Author
     package `com.xc17edb19a` alongside `okhttp3`, Apache HttpClient 5,
     `com.sun.jna.platform.*`, a `mozilla/` NSS tree, `org.java_websocket`,
-    four HTML lure files at the root, and one native binary named
-    `peynir.dll`.
+    four HTML lure files at the root, and native binaries: `peynir.dll`
+    at the JAR root plus per-platform `native/*` `.so` / `.dll` / `.jnilib`
+    / `.a` files.
 12. **Find the C2 without executing.** `grep -aroEh 'https?://…'` over the
     exploded tree, filtered against a stock allowlist of stdlib/ICU
-    registry URLs. Exactly one non-library URL survived:
-    `http://52.249.219.108:3001`. WHOIS puts 52.249.0.0/16 in Microsoft
-    Azure (`MSFT`, ASN 8075). Plain HTTP, nonstandard port.
+    registry URLs. Exactly one non-library URL survived at this stage:
+    `http://52.249.219.108:3001` — plain HTTP, nonstandard port. WHOIS
+    was not run in-session, so ASN/geolocation is not asserted here.
 13. **Confirm the JAR is Exastealer, not just self-labeled.** The class
-    surface matches: JNA-imported `MyCrypt32` and `NCrypt` inner classes
-    (DPAPI unwrap for Chrome/Edge browser cookies and passwords), a
-    `mozilla/` tree (Firefox NSS), `TOKEN_ELEVATION` (elevation-check
-    scaffolding), okhttp3 + Apache HC5 + java-websocket (multi-channel
-    exfil), four pre-styled HTML dialogs (`beta-game-setup.html`,
-    `fake-error.html`, `mc-client-setup.html`, `watch-setup.html`) whose
-    titles telegraph the social-engineering surface.
+    surface fits an infostealer: JNA-declared `MyCrypt32` and `NCrypt`
+    inner classes (types used for DPAPI unwrap on Chromium-family
+    browsers), a `mozilla/` tree (types used for Firefox NSS), a
+    `TOKEN_ELEVATION` struct binding, okhttp3 + Apache HC5 +
+    java-websocket (types available for network exfil), and four
+    pre-styled HTML dialogs (`beta-game-setup.html`, `fake-error.html`,
+    `mc-client-setup.html`, `watch-setup.html`). What each API is
+    *called for* was not read at this step; step 21 verifies most of it.
 14. **Reverse `peynir.dll` by hand.** LLVM `objdump -x -p` for headers and
     imports, `objdump -d --disassemble-symbols=…` for the two JNI exports.
     The header is trivially not packed: real `.text`/`.rdata`/`.data`
@@ -132,19 +136,23 @@ hash, or a decision.
     slots `+0x528`/`+0x520` (`GetStringUTFChars`/`GetStringUTFLength`)
     and forwards them to `sub_1800011c0`.
     That core does three things in order:
-    - writes a fake `PEB->CurrentDirectory.Buffer` / `DllPath.Buffer` /
-      `Ldr->InLoadOrderModuleList.Flink->FullDllName.Buffer` to a hardcoded
-      `C:\Windows\System32\` wide string in `.rdata`, spoofing the
-      "auto-elevate" whitelist that the AIS reads out of the caller's PEB;
-    - XOR-assembles a 32-byte wide string on the stack from three 16-byte
-      `.rdata` blobs, which is the elevation moniker
-      `Elevation:Administrator!new:{3E5FC7F9-9A51-4367-9063-A120244FBEC7}`
-      — CMSTPLUA (`ICMLuaUtil`);
-    - `CoInitialize`, `CoGetObject` on the moniker, then `call [rax+0x48]`
-      on the returned COM interface. Vtable slot 9 in `ICMLuaUtil` is
-      `ShellExec`. Followed by `Release` (`+0x10`) and `CoUninitialize`.
-
-    This is UACMe method 41 verbatim, packaged as a JNI helper.
+    - writes fake pointers into the PEB — `ProcessParameters->CurrentDirectory.Buffer`
+      and `DllPath.Buffer`, plus the LDR entry's `FullDllName.Buffer` —
+      pointing at a cleartext `.rdata` UTF-16 string `C:\Windows\System32\`,
+      spoofing the "trusted directory" fields Windows reads for auto-elevation
+      decisions;
+    - XOR-decrypts 32 bytes on the stack from three 16-byte `.rdata` blobs
+      at `0x180018b80`, `0x180018b90`, `0x180018bb0`. The 32 bytes are two
+      GUIDs: `{3E5FC7F9-9A51-4367-9063-A120244FBEC7}` (CLSID_CMSTPLUA) and
+      `{6EDD6D74-C007-4E75-B76A-E5740995E24C}` (IID_ICMLuaUtil). The
+      elevation-moniker prefix `"Elevation:Administrator!new:"` itself is
+      cleartext at `.rdata:0x180018b40` and is concatenated with
+      `StringFromCLSID(CLSID_CMSTPLUA)` before use.
+    - `CoInitialize`, `CoGetObject(<moniker>, &BIND_OPTS3, &IID_ICMLuaUtil, &ppv)`,
+      then `call [rax+0x48]` on the returned interface. The
+      `+0x48` slot maps to `ICMLuaUtil::ShellExec` per public documentation
+      of that interface; the sample itself does not name the method.
+      Followed by `Release` (`+0x10`) and `CoUninitialize`.
 15. **Choice not to use `flowref-decompiler` on the DLL.** Recorded
     honestly: the skill's I0 gate emits C only for modeled instruction
     classes and refuses on unmodeled paths, and this DLL's meaning lives
@@ -153,9 +161,11 @@ hash, or a decision.
     reverse was done by hand against the disassembly. This is the shape
     of the "state the detection floor" rule — a tool that would report
     "unmodeled" on every line is not what the picture needs.
-16. **Publish the analysis.** `git init` in a scratch tree, LICENSE + README
-    + IOCs + hashes + `PEYNIR_DLL.md` + peeler + shell orchestrator,
-    `gh repo create fire/elriagame-exastealer-analysis --public --source=. --push`.
+16. **Publish the analysis.** `git init` in a scratch tree with README,
+    IOCs, hashes, LICENSE, SAMPLES, `.gitignore`, and the peel / unpack
+    scripts, then `gh repo create fire/elriagame-exastealer-analysis
+    --public --source=. --push`. `PEYNIR_DLL.md` and the peynir reverse
+    landed in a follow-up commit, and `LOGBOOK.md` (this file) in a third.
     Policy in `.gitignore` and README: no malware binary is committed;
     hashes only.
 17. **Attempt to reverse the JAR body.** `brew install openjdk`, download
@@ -208,9 +218,11 @@ Later the same session, the JAR body is readable. Method and apparatus:
 20. **Java reflection dumper** (`scripts/dump_tables.java`). Loaded each
     class inside a fresh `URLClassLoader`, triggered `<clinit>`, and read
     every `private static final String[]` and `int[]` field by name-agnostic
-    type probe. 37 classes had static arrays. Six JNA `Native.load` classes
-    failed to initialise on macOS (`libkernel32.dylib` etc. do not exist);
-    that is correct — those classes carry no obfuscated strings.
+    type probe. 37 classes had static arrays. Several JNA `Native.load`-based
+    classes (`$MyKernel32`, `$Shell32`, `$MyAdvapi32`, `$MyCrypt32`, `$NCrypt`)
+    failed to initialise on macOS because the Windows DLLs they bind against
+    (`libkernel32.dylib` etc.) do not exist; those classes hold JNA
+    interface bindings, not obfuscated strings, so the skip is safe.
 21. **Python deobfuscator** (`scripts/deobfuscate_strings.py`). Parses each
     Vineflower source for the per-class decrypt method signatures; extracts
     six free constants from each body (`K_INDEX_MAGIC` / `K_INDEX_CHAR_MAGIC`,
@@ -222,25 +234,32 @@ Later the same session, the JAR body is readable. Method and apparatus:
     reimplements `String.hashCode()` and Java 32-bit arithmetic shift.
     Result: **2 340 / 2 341 (99.96%)** call sites substituted with correct
     plaintext; one 3-arg `x`-named variant in `SquEZNKwht` remains.
-22. **Sanity witness.** The known call `K(740929368, 332741314)` inside
-    `PLhWEEjyn.disableTaskManager` decodes to `"wscript.exe"` — matches the
-    `new ProcessBuilder(…, "//B", "//Nologo", vbsPath)` shape. Two hand-
-    traces (this one and `ENCRYPTED_KEY` in `<clinit>` → `"PANEL-XSER-YZ76-YFMK"`)
-    confirmed the algorithm before the batch pass wrote to disk.
+22. **Sanity witness.** The call `K(740929368, 332741314)` inside
+    `PLhWEEjyn.disableTaskManager` was decrypted by hand in a Python REPL
+    and yielded `"wscript.exe"` — the value fits the surrounding
+    `new ProcessBuilder(…, "//B", "//Nologo", vbsPath)` context. That
+    single hand-trace was the witness that unlocked the batch pass; the
+    static `<clinit>` constants (`SETUP_MODE = "-game"`,
+    `ENCRYPTED_KEY = "PANEL-XSER-YZ76-YFMK"`) were then produced by the
+    batch pass itself, not verified by hand.
 23. **What tables not to publish.** `tables.json` contains
-    `IvTHdVAG.STEALTH_BASES = [analyst_home]` from the `<clinit>` side
-    effect, plus `IvTHdVAG.__NATIVE_CHUNKS[317]` — the base64-chunked bytes
-    of `peynir.dll` embedded in the JAR. Neither is in the published repo.
-    The full decrypted Java source is not published either; the repo policy
-    covers analysis and tools, not payload redistribution.
+    `IvTHdVAG.STEALTH_BASES` — the array's first element is the analysis
+    host's `user.home` value, computed by the `<clinit>` at load time.
+    It also holds `IvTHdVAG.__NATIVE_CHUNKS` (317 strings) and
+    `__NATIVE_ORDER` (317 ints) which together reassemble to the bytes of
+    `peynir.dll` embedded in the JAR. Neither is in the published repo.
+    The full decrypted Java source is not published either; the repo
+    policy covers analysis and tools, not payload redistribution.
 
 ## Open items
 
 - One 3-arg `x`-named string decrypt variant in `SquEZNKwht` remains
   unmodelled; 4 strings unread.
-- `TfixYBtWK` (the C2 poller) defeated Vineflower's restructuring at one
-  spot; class-level `okhttp3` + `java-websocket` imports say it uses both
-  HTTP and WebSocket, but the exact request framing is not written down.
+- `TfixYBtWK` — the class that holds the static `WebSocketClient wsClient`
+  used from other classes for exfil `send(...)` — defeated Vineflower's
+  restructuring at one spot. Its server URL is not recovered here.
+- `maGBqBEy.killDiscord` also failed Vineflower; the `Runtime.exec(K(...))`
+  argument (the exact process-kill command) is not recovered.
 - Native `native/*` per-platform binaries (`.so`/`.dll`/`.jnilib`/`.a`) were
   assumed to be stock JNA platform libraries on the shape of their names,
   not verified byte-for-byte.

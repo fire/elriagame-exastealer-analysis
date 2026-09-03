@@ -20,28 +20,29 @@ Nothing here was executed; the whole analysis is static, on macOS.
 | Install dir | `%LOCALAPPDATA%\emre\` |
 | Persistence | `HKCU\...\Run\emre` = `javaw -jar %LOCALAPPDATA%\emre\emre.jar --startup` |
 | Stealth | 0×0 window, `skipTaskbar`, prevents-quit, self-respawn, auto-restart ≤ 2× |
-| Capabilities | DPAPI unwrap (`MyCrypt32`/`NCrypt`), Firefox NSS, token-elevation probe, JNA, **elevation-moniker UAC bypass in `peynir.dll`** |
+| Capabilities | JNA bindings for DPAPI (`MyCrypt32`), NCrypt (Chromium master-key unwrap), Firefox NSS (`PK11SDR_Decrypt`), SQLite (Chromium cookie/login DBs), Steam and Discord token stealing, browser wallet extension theft (61 extensions), 48 desktop wallets, plus **elevation-moniker UAC bypass in `peynir.dll`** |
 | Exfil | okhttp3 + Apache HttpClient 5 + java-websocket → `http://52.249.219.108:3001` (WebSocket URL not recovered) |
 | Locale hint | "emre" (Turkish given name), "peynir" (Turkish "cheese") |
 
 ## Delivery chain
 
 ```
-ElriaGame.exe  (NSIS SFX, 140 MB)
-└─ $PLUGINSDIR/
-   ├─ nsis7z.dll, StdUtils.dll, System.dll   (stock NSIS plugins)
-   └─ app-64.7z                              (electron-builder payload)
-      └─ (Electron 32 runtime + Chromium DLLs + locales)
-         ├─ ElriaGame.exe                    (Electron shell, 224 MB)
-         └─ resources/
-            ├─ app.asar                      (62 KB — thin launcher)
-            │   └─ launcher1.js              (obfuscated dropper)
-            ├─ app.asar.unpacked/            (7zip-bin per-arch binaries)
-            ├─ 7za.exe, 7za-ia32.exe         (bundled 7-Zip CLI)
-            ├─ elevate.exe                   (UAC-elevate helper)
-            └─ data.7z  (AES-256, password protected)
-                ├─ emre.jar                  (Exastealer, ~42 MB)
-                └─ jre.zip                   (private OpenJDK runtime)
+ElriaGame.exe  (NSIS SFX, 146 MB)
+├─ $PLUGINSDIR/
+│   ├─ nsis7z.dll, StdUtils.dll, System.dll   (stock NSIS plugins)
+│   └─ app-64.7z                              (electron-builder payload)
+└─ (extracted from app-64.7z; siblings at top level:)
+   ├─ ElriaGame.exe                           (Electron shell, 235 MB)
+   ├─ Chromium DLLs, resources.pak, locales/, chrome_*_percent.pak, etc.
+   └─ resources/
+      ├─ app.asar                             (62 KB — thin launcher)
+      │   └─ launcher1.js                     (obfuscated dropper)
+      ├─ app.asar.unpacked/                   (7zip-bin per-arch binaries)
+      ├─ 7za.exe, 7za-ia32.exe                (bundled 7-Zip CLI)
+      ├─ elevate.exe                          (UAC-elevate helper — unused by launcher)
+      └─ data.7z                              (7zAES-encrypted)
+          ├─ emre.jar                         (Exastealer, 42.6 MB)
+          └─ jre.zip                          (private JRE)
 ```
 
 ## Stage-1 through stage-4: the JS dropper
@@ -86,7 +87,7 @@ Constants:
 
 ```js
 var APP_NAME         = "emre";
-var ARCHIVE_PASSWORD = "7zgw3s6kxCZi";       // "Injected during build" — author's comment
+var ARCHIVE_PASSWORD = "7zgw3s6kxCZi";       // Injected during build
 var MAX_RESTARTS     = 2;
 ```
 
@@ -109,9 +110,10 @@ Flow, in order:
 7. **Persist.** Writes the HKCU Run key via `reg add`:
    ```
    HKCU\Software\Microsoft\Windows\CurrentVersion\Run
-     emre = "javaw" -jar "%LOCALAPPDATA%\emre\emre.jar" --startup
+     emre = "<full-path>\javaw.exe" -jar "%LOCALAPPDATA%\emre\emre.jar" --startup
    ```
-   Preferring `javaw.exe` over `java.exe` when it exists — no console window.
+   The launcher resolves the full path to `javaw.exe` under the extracted
+   JRE tree and prefers it over `java.exe` (no console window).
 8. **Launch the JAR** with `child_process.spawn(java, ["-jar", jar], {stdio:"ignore", detached:true, windowsHide:true})`.
 9. **Liveness watchdog.** 20 s after spawning, checks whether Java is still
    running by three methods (JAR file lock via `fs.openSync`, `tasklist` grep
@@ -153,14 +155,16 @@ Structural observations from the class list (4 539 `.class` files):
   `fake-error.html`, `mc-client-setup.html`, `watch-setup.html` — all rendered
   as Windows-installer-lookalike dialogs while the stealer runs.
 
-The only non-library URL anywhere in the JAR is the C2:
+Before decryption, the only non-library URL anywhere in the JAR is the C2:
 
 ```
 http://52.249.219.108:3001
 ```
 
-That IP is in Microsoft's Azure range (52.249.0.0/16, "MSFT" ASN 8075).
-Plain HTTP, nonstandard port.
+Plain HTTP, nonstandard port. IP ASN / geolocation was not looked up in-session.
+After JAR string decryption, three routes on this endpoint and two live
+Discord API URLs surface — see [`IOCS.md`](IOCS.md) and
+[`JAR_INTERNALS.md`](JAR_INTERNALS.md).
 
 ## Indicators of compromise
 

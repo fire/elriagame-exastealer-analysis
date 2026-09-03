@@ -71,7 +71,7 @@ Since running the JAR was off the table, the extraction was static-then-controll
 
 ### C2 protocol
 
-The single C2 endpoint is `http://52.249.219.108:3001`. Recovered routes (from
+The HTTP C2 endpoint is `http://52.249.219.108:3001`. Recovered routes (from
 decrypted strings):
 
 | method | path | purpose |
@@ -83,12 +83,14 @@ decrypted strings):
 Transport is plain HTTP. This build ships the key `PANEL-XSER-YZ76-YFMK` in
 `PLhWEEjyn.ENCRYPTED_KEY`; it is passed as the `<KEY>` path segment above and
 also to `/api/validate-tokens` as the initial handshake. `TfixYBtWK.wsClient`
-(referenced from `WmJoRcgQD` and `XkgqXwdrE`) is an `org.java_websocket.client.WebSocketClient`,
-so a WebSocket channel is also opened; its full URL is inside the parts of
-`TfixYBtWK` that Vineflower could not restructure and is not recovered here.
-The JAR calls Discord's real API (`https://discord.com/api/v10/users/@me`,
-`https://canary.discord.com/api/v9/users/@me`) to validate captured tokens
-before sending them onward.
+(field type `org.java_websocket.client.WebSocketClient`, verified through
+bytecode-level `getstatic com/xc17edb19a/TfixYBtWK.wsClient` references
+emitted by Vineflower inside `WmJoRcgQD` and `XkgqXwdrE`) is a WebSocket
+client; its target URL is not recovered here because the entire `TfixYBtWK`
+class failed Vineflower's decompilation. Two Discord API URLs appear in the
+decrypted strings — `https://discord.com/api/v10/users/@me` and
+`https://canary.discord.com/api/v9/users/@me` — the standard endpoint used
+to test whether a Discord token is valid.
 
 ### Class map (obfuscated → intent)
 
@@ -97,7 +99,7 @@ Recovered from decrypted strings and inner-class type names:
 | obfuscated class | role |
 |---|---|
 | `PLhWEEjyn` | Main-Class. Holds `ENCRYPTED_KEY = "PANEL-XSER-YZ76-YFMK"`, calls `JeJJcSSOx.decryptKey`, and drops a VBS to `%TEMP%\<8-hex>.vbs` that a spawned `wscript.exe //B //Nologo` runs to write the DisableTaskMgr / DisableCMD / NoTrayContextMenu registry values (full VBS reproduced below). |
-| `TfixYBtWK` | Holds the WebSocket client — `public static WebSocketClient wsClient` — that other classes (`WmJoRcgQD`, `XkgqXwdrE`) use to `send(...)` exfil frames. Vineflower could not restructure the setup path, so the server URL is not recovered here. Class-level imports also pull in okhttp3 and Apache HttpClient 5. |
+| `TfixYBtWK` | Holds the WebSocket client — `public static WebSocketClient wsClient` — that other classes (`WmJoRcgQD`, `XkgqXwdrE`) use to `send(...)` exfil frames. Vineflower failed to decompile the entire class, so nothing beyond the `wsClient` static-field references and the class name is recovered here. |
 | `CsHfiRTnj` + `$User32` | Declares `com.sun.jna.platform.win32.User32` interface bindings; specific User32 calls used are not read here. |
 | `JeJJcSSOx` + `$MyCrypt32`, `$NCrypt`, `$NSS`, `$SECItem`, `$DATA_BLOB`, `$MasterKey`, `$ParsedKeyBlob` | Browser credential decryption. Inner classes declare JNA bindings for `Crypt32` (DPAPI `CryptUnprotectData`), `NCrypt` (Chromium AES-GCM master-key unwrap), and Firefox `NSS` (`PK11_CheckUserPassword`, `PK11SDR_Decrypt`, `NSS_Init`, `NSS_Shutdown`). |
 | `DmPNptVEeS` + `$SQLite3`, `$Database` | JNA-bound `sqlite3` interface (`$SQLite3`) with a small `$Database` wrapper — used to read Chromium's `Login Data`, `Cookies`, `Web Data` etc. |
@@ -105,11 +107,11 @@ Recovered from decrypted strings and inner-class type names:
 | `XkgqXwdrE` | Holds the `ALLOWED_EXTENSIONS` (90) array — cleartext filenames used to filter files to steal. Also references `TfixYBtWK.wsClient` for exfil. |
 | `LzdpgQyS` + `$ProfileData` | Browser profile enumeration; `LzdpgQyS.runExtraction(ZipOutputStream)` is called from `PLhWEEjyn` main via a lambda and writes into a shared `ZipOutputStream`. |
 | `maGBqBEy` | Discord token stealer. `maGBqBEy.getTokens()` and `maGBqBEy.killDiscord()` are both called from `PLhWEEjyn.main` lambdas; the log line `"[maGBqBEy] === METHOD 1: Cookie DB + Disk Extraction ==="` and route strings for `https://discord.com/api/v9/users/@me` are recovered from decrypted strings, but the process-kill command itself is inside a `Runtime.exec(K(...))` in `killDiscord` that Vineflower failed to structure, so the exact command is not read. |
-| `kvjohfOH` + `$Coin` | Crypto-wallet accessor. Paired with `MMhwxaxcc.DESKTOP_WALLETS` and `MMhwxaxcc.EXTENSION_DB` by import graph; exact per-wallet code paths not read. |
-| `UCBjYxHzwv` + `$SteamAccount` | Steam credential stealer (SteamAccount type + 45 references to it). |
-| `NjYGKscRL` + anon `$1..$6` | Six anonymous inner classes; the outer holds a 399-entry string table. Decrypted call sites reference Discord auth session URLs, `remote-auth-gateway.discord.gg`, Braintree, and Stripe hostnames, so this appears to be a network-interception pipeline — the per-anon mapping is not confirmed. |
-| `wfveoAPd` | Injector. `public static void inject()` is called from `PLhWEEjyn.main` via a lambda. Contains the inline `webpackChunkdiscord_app.push([[Symbol()], {}, o => { ... }])` payload and a `"taskkill /F /IM \""` template. |
-| `IvTHdVAG` + `$PEB`, `$PEB_LDR_DATA`, `$RTL_USER_PROCESS_PARAMETERS`, `$UNICODE_STRING`, `$LIST_ENTRY`, `$BIND_OPTS3`, `$GUID`, `$ICMLuaUtil`, `$Ole32`, `$Ntdll`, `$NtdllExt`, `$Kernel32Ext`, `$TOKEN_ELEVATION`, `$X64_CONTEXT`, `$PROCESS_BASIC_INFORMATION` | The **Java-side reimplementation** of the CMSTPLUA / `ICMLuaUtil` elevation-moniker bypass that `peynir.dll` provides natively. Also ships `__NATIVE_CHUNKS` (317 strings) and `__NATIVE_ORDER` (317 ints) whose reassembled bytes match `peynir.dll` — the DLL is embedded in the JAR as well. |
+| `kvjohfOH` + `$Coin` | Class carries a `$Coin` inner type; no meaningful decompiled body was recovered from this file (Vineflower produced nothing beyond the class stub). Role not read. |
+| `UCBjYxHzwv` + `$SteamAccount` | Declares a `$SteamAccount` type; `grep` shows 45 references to it inside the class. Steam handling by class-name inference; specific fields not read here. |
+| `NjYGKscRL` + anon `$1..$6` | Six anonymous inner classes; the outer's `String[] K` table has 399 entries. Vineflower produced only a class stub for this file, so no decrypted strings could be substituted into the body — role not read. |
+| `wfveoAPd` | Injector. `public static void inject()` is called from `PLhWEEjyn.main` via a lambda. Contains the inline `webpackChunkdiscord_app.push([[Symbol()], {}, o => { ... }])` payload, a `"taskkill /F /IM \""` template, and decrypted `urls: [...]` arrays referencing `wss://remote-auth-gateway.discord.gg/*`, `https://*.discord.com/api/v*/auth/sessions`, and Braintree / Stripe token endpoints. |
+| `IvTHdVAG` + `$PEB`, `$PEB_LDR_DATA`, `$RTL_USER_PROCESS_PARAMETERS`, `$UNICODE_STRING`, `$LIST_ENTRY`, `$BIND_OPTS3`, `$GUID`, `$ICMLuaUtil`, `$Ole32`, `$Ntdll`, `$NtdllExt`, `$Kernel32Ext`, `$TOKEN_ELEVATION`, `$X64_CONTEXT`, `$PROCESS_BASIC_INFORMATION` | Declares the Java-side JNA bindings mirroring the CMSTPLUA / `ICMLuaUtil` elevation-moniker technique that `peynir.dll` implements natively. Verified: `$Ole32` declares `CoGetObject(WString, Pointer, IvTHdVAG.GUID, PointerByReference)` and `CoInitialize(Pointer)` at line 1174/1178 of the decompiled file. Also ships `__NATIVE_CHUNKS` (317 strings) and `__NATIVE_ORDER` (317 ints) — the shape (317 chunks + 317 ordered indices, byte lengths consistent with 118 KB DLL) fits a base64-chunked + reordered `peynir.dll` payload; reassembly-and-hash-match not run in-session. Whether the Java-side path is used at runtime, or only the native `peynir.dll`, was not determined. |
 | `SquEZNKwht` + `$DebugLogger`, `$MyKernel32`, `$MyAdvapi32`, `$Shell32`, `$TOKEN_ELEVATION` | Windows API layer + `%TEMP%\debug.log` logger. `SquEZNKwht.DebugLogger.log` is the log entry point used throughout. |
 | `zDvfTOGiK` + `$BrowserConfig` | Per-browser config records (paths, profile dir layout, extension DB filename). Its String array (`x[466]`) is the largest per-class table in the JAR. |
 | `HIdPkdebB`, `nXstjVHu`, `NGyFAKxu`, `WmJoRcgQD`, `SPwtRpLHG`, `aGQJfZBv$WinError` | Utility / error-code helpers. `NGyFAKxu.main` is a stand-alone `System.out.println` harness left in the build; the others carry supporting logic whose specific roles were not read here. |
@@ -215,11 +217,12 @@ Office documents that likely contain credentials or recovery phrases.
   build, so the exact command string is not recovered — `wfveoAPd` separately
   contains the template `"taskkill /F /IM \""` which is the likely shape.
 - **Discord renderer injection** (`wfveoAPd.inject` + inline JS):
-  `webpackChunkdiscord_app.push([[Symbol()], {}, o => { … }])` pushes a fake
+  `webpackChunkdiscord_app.push([[Symbol()], {}, o => { … }])` pushes a
   module into Discord's webpack chunk map. Decrypted `urls: [...]` arrays in
   the injected payload include `wss://remote-auth-gateway.discord.gg/*`,
-  `https://*.discord.com/api/v*/auth/sessions`, and Braintree/Stripe token
-  endpoints, so the injection targets Discord authentication and payment flows.
+  `https://*.discord.com/api/v*/auth/sessions`, and Braintree / Stripe token
+  endpoints — the exact interception targets. What the injected `o => { … }`
+  handler does with intercepted traffic was not itemised.
 - **HTML lures** (`beta-game-setup.html`, `mc-client-setup.html`,
   `watch-setup.html`, `fake-error.html`) are pre-styled Windows-installer
   lookalike windows. `LFVkhEygta.SetupType` enumerates them:

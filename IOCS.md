@@ -4,13 +4,13 @@
 
 | kind | value | notes |
 |---|---|---|
-| C2 (HTTP) | `http://52.249.219.108:3001` | Microsoft Azure, plain HTTP, nonstandard port. |
+| C2 (HTTP) | `http://52.249.219.108:3001` | plain HTTP, nonstandard port; ASN/geolocation not checked here |
 | C2 route  | `POST /api/validate-tokens`             | key + Discord-token validation |
 | C2 route  | `POST /api/discord-injection/<KEY>`     | Discord-renderer IPC / injection callback |
 | C2 route  | `POST /api/internal/log`                | progress / error logging |
 | Live Discord API | `GET https://discord.com/api/v10/users/@me` | validate stolen token |
 | Live Discord API | `GET https://canary.discord.com/api/v9/users/@me` | validate canary token |
-| Operator key | `PANEL-XSER-YZ76-YFMK` | baked into this build's `PLhWEEjyn.ENCRYPTED_KEY`; sent as `KEY` |
+| Build key | `PANEL-XSER-YZ76-YFMK` | value of `PLhWEEjyn.ENCRYPTED_KEY` in this build; passed as `<KEY>` path segment and to `/api/validate-tokens` |
 
 The JAR bundles `okhttp3`, Apache HttpClient 5, and `java-websocket`, so
 subsequent exfil channels may include WebSocket (`ws://52.249.219.108:3001/...`)
@@ -58,11 +58,18 @@ See [`HASHES.txt`](HASHES.txt).
 
 ## UAC bypass (see [`PEYNIR_DLL.md`](PEYNIR_DLL.md))
 
-- CLSID: `{3E5FC7F9-9A51-4367-9063-A120244FBEC7}` (CMSTPLUA / `ICMLuaUtil`).
-- Moniker: `Elevation:Administrator!new:{3E5FC7F9-9A51-4367-9063-A120244FBEC7}`,
-  XOR-decrypted from three 16-byte blobs in `peynir.dll` `.rdata`.
-- Method: PEB `CurrentDirectory` / `DllPath` spoofed to `C:\Windows\System32\`,
-  then `CoGetObject` + `ICMLuaUtil::ShellExec` (vtable `+0x48`).
+- CLSID: `{3E5FC7F9-9A51-4367-9063-A120244FBEC7}` (CMSTPLUA), and IID
+  `{6EDD6D74-C007-4E75-B76A-E5740995E24C}` (`ICMLuaUtil`). Both are
+  XOR-assembled at runtime from three 16-byte blobs at
+  `.rdata:0x180018b80`, `0x180018b90`, `0x180018bb0` in `peynir.dll`.
+- Moniker prefix `Elevation:Administrator!new:` is cleartext at
+  `.rdata:0x180018b40`; the assembled moniker is
+  `Elevation:Administrator!new:{3E5FC7F9-9A51-4367-9063-A120244FBEC7}`.
+- Method: PEB `CurrentDirectory` / `DllPath` and the loader entry's
+  `FullDllName` all rewritten to point at `C:\Windows\System32\`, then
+  `CoGetObject(<moniker>, &BIND_OPTS3, &IID_ICMLuaUtil, &ppv)`, then a
+  vtable-slot call at `+0x48` on the returned interface (`ShellExec` per
+  public docs of `ICMLuaUtil`).
 
 ## Detection ideas
 
